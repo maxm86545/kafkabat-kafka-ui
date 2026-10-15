@@ -31,6 +31,12 @@ public class BackwardEmitter extends RangePollingEmitter {
   }
 
   @Override
+  protected boolean canSendPartiallyPolledRange() {
+    // records are sent from the newest, but polling of the range starts from the oldest
+    return false;
+  }
+
+  @Override
   protected TreeMap<TopicPartition, FromToOffset> nextPollingRange(TreeMap<TopicPartition, FromToOffset> prevRange,
                                                                    SeekOperations seekOperations) {
     TreeMap<TopicPartition, Long> readToOffsets = new TreeMap<>(Comparator.comparingInt(TopicPartition::partition));
@@ -44,7 +50,7 @@ public class BackwardEmitter extends RangePollingEmitter {
       );
     }
 
-    int msgsToPollPerPartition = Math.max(1, (int) Math.ceil((double) messagesPerPage / readToOffsets.size()));
+    int msgsToPollPerPartition = Math.max(1, (int) Math.ceil((double) pollingWindow() / readToOffsets.size()));
     TreeMap<TopicPartition, FromToOffset> result = new TreeMap<>(Comparator.comparingInt(TopicPartition::partition));
     readToOffsets.forEach((tp, toOffset) -> {
       long tpStartOffset = seekOperations.getBeginOffsets().get(tp);
