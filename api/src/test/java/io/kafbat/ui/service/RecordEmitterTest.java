@@ -365,6 +365,64 @@ class RecordEmitterTest extends AbstractIntegrationTest {
         .verify();
   }
 
+  @Test
+  void pollsAllRecordsWhenRoundWithGrownWindowExceedsBytesLimit() throws Exception {
+    // small records let polling window grow, then large records make the next round exceed bytes limit,
+    // so polling of the round is stopped and window is shrunk
+    String topic = TOPIC + "_mixed_sizes";
+    createTopic(new NewTopic(topic, 1, (short) 1));
+    String largePayload = "x".repeat(300 * 1024);
+    List<String> largeValues = new ArrayList<>();
+    try (var producer = KafkaTestProducer.forKafka(kafka)) {
+      for (int i = 0; i < 1000; i++) {
+        producer.send(topic, "small_before_" + i).get();
+      }
+      for (int i = 0; i < 200; i++) {
+        largeValues.add("large_" + i + "_" + largePayload);
+        producer.send(topic, largeValues.getLast()).get();
+      }
+      for (int i = 0; i < 1000; i++) {
+        producer.send(topic, "small_after_" + i).get();
+      }
+    }
+    Predicate<TopicMessageDTO> largeOnly = m -> m.getValue().startsWith("large_");
+    try {
+      var forwardEmitter = new ForwardEmitter(
+          this::createConsumer,
+          new ConsumerPosition(EARLIEST, topic, List.of(), null, null),
+          largeValues.size(),
+          RECORD_DESERIALIZER,
+          largeOnly,
+          PollingSettings.createDefault(),
+          CURSOR_MOCK
+      );
+      var backwardEmitter = new BackwardEmitter(
+          this::createConsumer,
+          new ConsumerPosition(LATEST, topic, List.of(), null, null),
+          largeValues.size(),
+          RECORD_DESERIALIZER,
+          largeOnly,
+          PollingSettings.createDefault(),
+          CURSOR_MOCK
+      );
+
+      // not logging collected values - they are large
+      List<Consumer<FluxSink<TopicMessageEventDTO>>> emitters = List.of(forwardEmitter, backwardEmitter);
+      for (var emitter : emitters) {
+        expectEmitter(emitter,
+            largeValues.size(),
+            e -> e.recordWith(ArrayList::new)
+                .expectNextCount(largeValues.size())
+                .expectRecordedMatches(r -> r.containsAll(largeValues)),
+            _ -> {
+            }
+        );
+      }
+    } finally {
+      deleteTopic(topic);
+    }
+  }
+
   private void expectEmitter(Consumer<FluxSink<TopicMessageEventDTO>> emitter, List<String> expectedValues) {
     expectEmitter(emitter,
         expectedValues.size(),

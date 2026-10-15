@@ -31,6 +31,12 @@ public class ForwardEmitter extends RangePollingEmitter {
   }
 
   @Override
+  protected boolean canSendPartiallyPolledRange() {
+    // records are sent in ascending order, so polled part of the range goes first
+    return true;
+  }
+
+  @Override
   protected TreeMap<TopicPartition, FromToOffset> nextPollingRange(TreeMap<TopicPartition, FromToOffset> prevRange,
                                                                    SeekOperations seekOperations) {
     TreeMap<TopicPartition, Long> readFromOffsets = new TreeMap<>(Comparator.comparingInt(TopicPartition::partition));
