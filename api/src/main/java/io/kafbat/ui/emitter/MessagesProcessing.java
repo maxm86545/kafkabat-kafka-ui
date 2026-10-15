@@ -19,6 +19,7 @@ import java.util.function.Predicate;
 import javax.annotation.Nullable;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.mutable.MutableBoolean;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.utils.Bytes;
 import reactor.core.publisher.FluxSink;
@@ -39,12 +40,16 @@ class MessagesProcessing {
     return limit != null && sentMessages >= limit;
   }
 
-  void send(FluxSink<TopicMessageEventDTO> sink,
-            Iterable<ConsumerRecord<Bytes, Bytes>> polled,
-            @Nullable Cursor.Tracking cursor) {
+  // returns false if some records were not processed (send limit reached or sink cancelled)
+  boolean send(FluxSink<TopicMessageEventDTO> sink,
+               Iterable<ConsumerRecord<Bytes, Bytes>> polled,
+               @Nullable Cursor.Tracking cursor) {
+    MutableBoolean allProcessed = new MutableBoolean(true);
     sortForSending(polled, ascendingSortBeforeSend)
         .forEach(rec -> {
-          if (!limitReached() && !sink.isCancelled()) {
+          if (limitReached() || sink.isCancelled()) {
+            allProcessed.setFalse();
+          } else {
             TopicMessageDTO topicMessage = deserializer.deserialize(rec);
             try {
               if (filter.test(topicMessage)) {
@@ -64,6 +69,7 @@ class MessagesProcessing {
             }
           }
         });
+    return allProcessed.booleanValue();
   }
 
   void sentConsumingInfo(FluxSink<TopicMessageEventDTO> sink, PolledRecords polledRecords) {

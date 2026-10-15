@@ -26,10 +26,11 @@ abstract class AbstractEmitter implements java.util.function.Consumer<FluxSink<T
     return messagesProcessing.limitReached();
   }
 
-  protected void send(FluxSink<TopicMessageEventDTO> sink,
-                      Iterable<ConsumerRecord<Bytes, Bytes>> records,
-                      @Nullable Cursor.Tracking cursor) {
-    messagesProcessing.send(sink, records, cursor);
+  // returns false if some records were not processed (send limit reached or sink cancelled)
+  protected boolean send(FluxSink<TopicMessageEventDTO> sink,
+                         Iterable<ConsumerRecord<Bytes, Bytes>> records,
+                         @Nullable Cursor.Tracking cursor) {
+    return messagesProcessing.send(sink, records, cursor);
   }
 
   protected void sendPhase(FluxSink<TopicMessageEventDTO> sink, String name) {

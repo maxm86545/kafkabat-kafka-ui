@@ -50,6 +50,16 @@ public class MessageFilters {
   private static final String CEL_RECORD_VAR_NAME = "record";
   private static final String CEL_RECORD_TYPE_NAME = TopicMessageDTO.class.getSimpleName();
 
+  // CEL record fields
+  private static final String PARTITION = "partition";
+  private static final String OFFSET = "offset";
+  private static final String TIMESTAMP_MS = "timestampMs";
+  private static final String KEY = "key";
+  private static final String KEY_AS_TEXT = "keyAsText";
+  private static final String VALUE = "value";
+  private static final String VALUE_AS_TEXT = "valueAsText";
+  private static final String HEADERS = "headers";
+
   private static final CelCompiler CEL_COMPILER = createCompiler();
   private static final CelRuntime CEL_RUNTIME = createRuntime();
   private static final Object CELL_NULL_VALUE = NullValue.NULL_VALUE;
@@ -138,10 +148,11 @@ public class MessageFilters {
 
   // Record fields for CEL script. Fields are computed on access, so json parsing of key/value
   // is only done when script uses record.key / record.value (e.g. not for record.keyAsText == "...")
+  @SuppressWarnings("java:S2160") // used only as CEL variable, never compared
   private static final class LazyRecordArgs extends AbstractMap<String, Object> {
 
     private static final List<String> FIELDS =
-        List.of("partition", "offset", "timestampMs", "key", "keyAsText", "value", "valueAsText", "headers");
+        List.of(PARTITION, OFFSET, TIMESTAMP_MS, KEY, KEY_AS_TEXT, VALUE, VALUE_AS_TEXT, HEADERS);
 
     private final TopicMessageDTO msg;
     private final Map<String, Object> parsed = new HashMap<>();
@@ -157,24 +168,31 @@ public class MessageFilters {
         return null;
       }
       return switch (name) {
-        case "partition" -> msg.getPartition();
-        case "offset" -> msg.getOffset();
-        case "timestampMs" -> msg.getTimestamp() != null ? msg.getTimestamp().toInstant().toEpochMilli() : null;
-        case "key" -> msg.getKey() != null
+        case PARTITION -> msg.getPartition();
+        case OFFSET -> msg.getOffset();
+        case TIMESTAMP_MS -> msg.getTimestamp() != null ? msg.getTimestamp().toInstant().toEpochMilli() : null;
+        case KEY -> msg.getKey() != null
             ? parsed.computeIfAbsent(name, n -> parseToJsonOrReturnAsIs(msg.getKey()))
             : null;
-        case "keyAsText" -> msg.getKey();
-        case "value" -> msg.getValue() != null
+        case KEY_AS_TEXT -> msg.getKey();
+        case VALUE -> msg.getValue() != null
             ? parsed.computeIfAbsent(name, n -> parseToJsonOrReturnAsIs(msg.getValue()))
             : null;
-        case "valueAsText" -> msg.getValue();
-        case "headers" -> Objects.requireNonNullElse(msg.getHeaders(), emptyMap());
+        case VALUE_AS_TEXT -> msg.getValue();
+        case HEADERS -> Objects.requireNonNullElse(msg.getHeaders(), emptyMap());
         default -> null;
       };
     }
 
     @Override
     public boolean containsKey(Object field) {
+      // not parsing key/value json just to check presence
+      if (KEY.equals(field)) {
+        return msg.getKey() != null;
+      }
+      if (VALUE.equals(field)) {
+        return msg.getValue() != null;
+      }
       return get(field) != null;
     }
 
@@ -189,18 +207,55 @@ public class MessageFilters {
       });
       return all.entrySet();
     }
+
+    @Nullable
+    private static Object parseToJsonOrReturnAsIs(@Nullable String str) {
+      if (str == null) {
+        return null;
+      }
+
+      try {
+        //@formatter:off
+        var map = OBJECT_MAPPER.readValue(str, new TypeReference<Map<String, Object>>() {});
+        //@formatter:on
+        return replaceCelNulls(map);
+      } catch (JsonProcessingException e) {
+        return str;
+      }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> replaceCelNulls(Map<String, Object> map) {
+      var result = new LinkedHashMap<String, Object>();
+
+      for (var entry : map.entrySet()) {
+        String key = entry.getKey();
+        Object value = entry.getValue();
+
+        if (value == null) {
+          result.put(key, CELL_NULL_VALUE);
+        } else if (value instanceof Map<?, ?>) {
+          var inner = (Map<String, Object>) value;
+          result.put(key, replaceCelNulls(inner));
+        } else {
+          result.put(key, value);
+        }
+      }
+
+      return result;
+    }
   }
 
   private static CelCompiler createCompiler() {
     Map<String, CelType> fields = Map.of(
-        "partition", SimpleType.INT,
-        "offset", SimpleType.INT,
-        "timestampMs", SimpleType.INT,
-        "keyAsText", SimpleType.STRING,
-        "valueAsText", SimpleType.STRING,
-        "headers", MapType.create(SimpleType.STRING, SimpleType.STRING),
-        "key", SimpleType.DYN,
-        "value", SimpleType.DYN
+        PARTITION, SimpleType.INT,
+        OFFSET, SimpleType.INT,
+        TIMESTAMP_MS, SimpleType.INT,
+        KEY_AS_TEXT, SimpleType.STRING,
+        VALUE_AS_TEXT, SimpleType.STRING,
+        HEADERS, MapType.create(SimpleType.STRING, SimpleType.STRING),
+        KEY, SimpleType.DYN,
+        VALUE, SimpleType.DYN
     );
 
     ImmutableSet<String> names = ImmutableSet
@@ -238,43 +293,6 @@ public class MessageFilters {
     return CelRuntimeFactory.standardCelRuntimeBuilder()
         .addLibraries(CelExtensions.strings(), CelExtensions.encoders())
         .build();
-  }
-
-  @Nullable
-  private static Object parseToJsonOrReturnAsIs(@Nullable String str) {
-    if (str == null) {
-      return null;
-    }
-
-    try {
-      //@formatter:off
-      var map = OBJECT_MAPPER.readValue(str, new TypeReference<Map<String, Object>>() {});
-      //@formatter:on
-      return replaceCelNulls(map);
-    } catch (JsonProcessingException e) {
-      return str;
-    }
-  }
-
-  @SuppressWarnings("unchecked")
-  private static Map<String, Object> replaceCelNulls(Map<String, Object> map) {
-    var result = new LinkedHashMap<String, Object>();
-
-    for (var entry : map.entrySet()) {
-      String key = entry.getKey();
-      Object value = entry.getValue();
-
-      if (value == null) {
-        result.put(key, CELL_NULL_VALUE);
-      } else if (value instanceof Map<?, ?>) {
-        var inner = (Map<String, Object>) value;
-        result.put(key, replaceCelNulls(inner));
-      } else {
-        result.put(key, value);
-      }
-    }
-
-    return result;
   }
 
 }
